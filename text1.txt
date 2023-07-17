@@ -1,0 +1,160 @@
+using Dell.Commerce.SRE.Correlation.Core;
+using Dell.Purchase.Checkout.Core.Infrastructure;
+using Dell.Purchase.Checkout.Core.Infrastructure.Middleware;
+using Dell.Purchase.ToolSuiteService.Business.IoC;
+using Dell.Purchase.ToolSuiteService.Domain.Models.Response;
+using Dell.Purchase.ToolSuiteService.Infrastructure.AppSettings;
+using Dell.Purchase.ToolSuiteService.Repositories.IoC;
+using Dell.Purchase.ToolSuiteService.Services.IoC;
+using Dell.Purchase.ToolSuiteService.Utility;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using MongoDB.Driver;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
+using NSwag;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+
+namespace Dell.Purchase.ToolSuiteService.Api
+{
+    [ExcludeFromCodeCoverage]
+    public class Startup
+    {
+        private readonly IConfiguration _configuration;
+        private readonly IWebHostEnvironment _env;
+        private const string AppName = "purchase-toolsuite-service";
+
+        public Startup(IConfiguration configuration, IWebHostEnvironment env)
+        {
+            _env = env;
+            _configuration = configuration;
+
+            //var configSetting = CupsEnvironmentSettings<RepositorySettings>.GetSettings(env.EnvironmentName, AppName,
+            //    env.ContentRootPath, (cupsSettings) =>
+            //    {
+            //        return RepositorySettings.GetKeyValueCollection(cupsSettings);
+            //    });
+            //ConfigSettingCollection = configSetting.ToDictionary(k => k.Key, v => v.Value);
+
+            var builder = new ConfigurationBuilder()
+               .SetBasePath(env.ContentRootPath)
+               .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: false, reloadOnChange: true)
+               //.AddInMemoryCollection(configSetting)
+               .AddEnvironmentVariables();
+
+            Configuration = builder.Build();
+        }
+        public IConfiguration Configuration { get; }
+        public Dictionary<string, string> ConfigSettingCollection { get; }
+
+        public void ConfigureServices(IServiceCollection services)
+        {
+            services.RegisterCache(Configuration,_env.EnvironmentName);
+            services.RegisterServices(Configuration);
+            services.RegisterRepository(ConfigSettingCollection);
+            services.AddHttpContextAccessor();
+            services.AddControllers().AddNewtonsoftJson(options =>
+            {
+                options.SerializerSettings.Converters = new List<JsonConverter> { new StringEnumConverter() };
+                options.SerializerSettings.NullValueHandling = NullValueHandling.Ignore;
+            });
+
+            var databaseName = Configuration["DataBaseName"];
+
+
+            services.AddCors(options =>
+            {
+                options.AddPolicy("AllowDell", cfg =>
+                {
+                    cfg.AllowAnyHeader()
+                       .AllowAnyMethod()
+                       .AllowCredentials()
+                       .SetIsOriginAllowed((origin) =>
+                       {
+                           if (!string.IsNullOrEmpty(origin) && Uri.TryCreate(origin, UriKind.Absolute, out Uri resultUri))
+                           {
+                               return resultUri.Host.EndsWith("dell.com");
+                           }
+                           return false;
+                       });
+                });
+            });
+            
+            services.AddApiVersioning(api =>
+            {
+                api.ReportApiVersions = true;
+            });
+            services.AddVersionedApiExplorer(options =>
+            {
+                options.GroupNameFormat = "VVV";
+                options.SubstituteApiVersionInUrl = true;
+                options.DefaultApiVersion = new ApiVersion(1, 0);
+                options.AssumeDefaultVersionWhenUnspecified = true;
+            });
+            services.AddSwaggerDocument(config =>
+            {
+                config.DocumentName = "v1";
+                config.ApiGroupNames = new[] { "1" };
+                config.PostProcess = document =>
+                {
+                    document.Info.Version = "v1";
+                    document.Info.Title = "Purchase ToolSuite Service";
+                    document.Info.Contact = new OpenApiContact
+                    {
+                        Name = "Tool Suite",
+                        Url = "https://www.toolsuite.dellsvc"
+                    };
+                };
+               
+                if (false)
+                {
+                    config.AddSecurity("", Enumerable.Empty<string>(), new OpenApiSecurityScheme
+                    {
+                        Type = OpenApiSecuritySchemeType.ApiKey,
+                        Name = "Authorization",
+                        Scheme = "basic",
+                        In = OpenApiSecurityApiKeyLocation.Header,
+                        Description = "Enter Api Key"
+                    });
+                }
+            });
+           
+            services.Configure<RepositorySettings>(Configuration.GetSection("RepositorySettings"));
+        }
+
+        
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
+            app.UseHttpsRedirection();
+            app.UseRouting();
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
+
+           
+            app.UseOpenApi();
+            app.UseSwaggerUi3(c =>
+            {
+                c.Path = "";
+                c.DocExpansion = "list";
+                c.DocumentTitle = "Purchase ToolSuite Service Swagger UI";
+            });
+            app.UseCors("AllowDell");
+            
+            app.UseEndpoints(endpoints => { endpoints.MapControllers(); });
+            app.ConfigureCorrelationId();
+        }
+    }
+}
