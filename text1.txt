@@ -1,1 +1,98 @@
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Dell.Purchase.Ship.Domain.Builder.ItemStack;
+using Dell.Purchase.Ship.Domain.Loggers;
+using Dell.Purchase.Ship.Domain.Services.Cart;
+using Dell.Purchase.Ship.Domain.Services.Items;
+using Dell.Purchase.Ship.Domain.Services.Pricing;
+using Dell.Purchase.Ship.Domain.Services.SalesOrder;
+using Dell.Purchase.Ship.Models.Cart;
+using Dell.Purchase.Ship.Models.PricingService.Response;
+using Dell.Purchase.Ship.Repository.SalesOrder;
+using Moq;
+using Xunit;
+using PricingSku = Dell.Purchase.Ship.Models.PricingService.Response.Sku;
+
+namespace Dell.Purchase.Ship.UnitTests.Services
+{
+    public class ItemServiceTests
+    {
+        private readonly IItemService _itemService;
+        private readonly Mock<ICartService> _cartService;
+        private readonly Mock<IItemStackBuilder> _itemStackBuilder;
+        private readonly Mock<ISalesOrderService> _salesOrderService;
+        private readonly Mock<IShippingMethodLogger> _logger;
+        private Guid _guid1 = Guid.NewGuid();
+        private readonly Mock<ISalesOrderServiceRepository> _salesOrderServiceRepository;
+
+        public ItemServiceTests()
+        {
+            _cartService = new Mock<ICartService>();
+            _itemStackBuilder = new Mock<IItemStackBuilder>();
+            _salesOrderService = new Mock<ISalesOrderService>();
+            _logger = new Mock<IShippingMethodLogger>();
+            _salesOrderServiceRepository = new Mock<ISalesOrderServiceRepository>();
+            _itemService = new ItemService(_cartService.Object, _itemStackBuilder.Object, _salesOrderService.Object, _logger.Object, _salesOrderServiceRepository.Object);
+        }
+
+        [Fact]
+        public async Task GetUserContext_ThrowsArgumentNullException_WhenSalesOrderIdIsNull()
+        {
+            await Assert.ThrowsAsync<ArgumentNullException>(()=> _itemService.GetUserContext(null));
+        }
+
+        [Fact]
+        public async Task GetUserContext_ShouldReturnCartContextDetails_ForValidRequest()
+        {
+            _salesOrderServiceRepository.Setup(x => x.GetSalesOrderAsync(It.IsAny<string>()))
+                .ReturnsAsync(new Models.SalesOrder.SalesOrder() 
+                { 
+                    References = new List<Models.SalesOrder.Reference>()
+                    {
+                        new Models.SalesOrder.Reference()
+                        {
+                            Target = "foo/salesOrderID"
+                        }
+                    }    
+                });
+
+            var context = new CommerceContext()
+            {
+                Country = "US",
+                Currency = "currency",
+                Region = "Region",
+                Segment = "Segment",
+                Language = "en",
+                CustomerSet = "CustomerSet",
+                SourceApplicationName = "SourceApplication",
+                BusinessUnitId = "1",
+                CompanyNumber = "2",
+                IsGOP = true
+            };
+
+            _cartService.Setup(x => x.GetCartAsync(It.IsAny<string>()))
+                .ReturnsAsync(new V3Cart()
+                {
+                    CommerceContext = context
+                });
+
+            var result = await _itemService.GetUserContext("salesOrderId");
+
+            Assert.NotNull(result);
+            Assert.Equal(context.Country, result.Context.Country);
+            Assert.Equal(context.Currency, result.Context.Currency);
+            Assert.Equal(context.Region, result.Context.Region);
+            Assert.Equal(context.Segment, result.Context.Segment);
+            Assert.Equal($"{context.Language}-{context.Country}", result.Context.CurrencyCultureInfo);
+            Assert.Equal(context.CustomerSet, result.Context.CustomerSet);
+            Assert.Equal(context.AccessGroup, result.Context.AccessGroup);
+            Assert.Equal(context.SourceApplicationName, result.Context.SourceApplicationName);
+            Assert.Equal(context.BusinessUnitId, result.Context.BusinessUnitId);
+            Assert.Equal(context.CompanyNumber, result.Context.CompanyNumber);
+            Assert.True(result.Context.IsGop);
+        }
+    }
+}
